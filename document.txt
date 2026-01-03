@@ -1,2 +1,0 @@
-this is a university project for machine learning course
-the main purpose of this LM is document retrieval 
