@@ -1,57 +1,25 @@
-# Video-Based Fall Detection using Anomaly Detection
+# Fall Detection AI 🚀
 
-This repository will contain a research-oriented implementation of a **fall detection system based on video anomaly detection**.
+**3D CNN trained on 6,988 videos** | **Test Accuracy: 71.03% F1: 71.09%**
 
-The core idea is to model *normal human activities* in video sequences and detect falls as **rare abnormal events**, rather than treating fall detection as a standard supervised classification problem.
+[![Accuracy](https://img.shields.io/badge/Test%20Accuracy-71.03%25-brightgreen)](https://github.com/Mortezamohasebati/Folio_Finder_AI/blob/main/confusion_matrix.png)
+[![Model Size](https://img.shields.io/badge/Model-196MB-orange)](https://github.com/Mortezamohasebati/Folio_Finder_AI/releases)
 
-At this stage, the project is **not implemented yet**. This repository currently serves as a starting point and design placeholder.
+## 🎯 Features
+- **Trained on**: 6,988 fall/no-fall videos
+- **Model**: Simple3D CNN (PyTorch)
+- **Test Results**: 71% accuracy, balanced F1-score
+- **Live prediction**: Any MP4 video
 
----
+## 🚀 Quick Start
 
-## Project Goal
+```bash
+# Clone + install
+git clone https://github.com/Mortezamohasebati/Folio_Finder_AI.git
+cd Folio_Finder_AI
+pip install -r requirements.txt
 
-The main objective of this project is to explore whether fall detection can be effectively formulated as an **anomaly detection problem** using video data.
+# Predict fall on YOUR video (model auto-downloads via LFS)
+python predict_fall.py your_video.mp4
 
-Key motivations:
-- Falls are rare and diverse events
-- Labeled fall data is often limited
-- Anomaly detection allows training primarily on normal activity
 
----
-
-## Planned Approach (High-Level)
-
-The planned system will likely include:
-- Video-based temporal modeling of human motion
-- Learning normal activity patterns from video sequences
-- Detecting falls as deviations from learned normal behavior
-
-Specific models, datasets, and architectures are **not finalized yet**.
-
----
-
-## Current Status
-
-- Project structure: **not finalized**
-- Model: **not implemented**
-- Dataset: **not selected**
-- Training pipeline: **not implemented**
-
-Development has **not started yet**.
-
----
-
-## Scope
-
-This project is intended for:
-- Academic research
-- Experimentation with video anomaly detection
-- Non-medical, non-critical applications
-
-It is **not intended** for clinical or real-world safety-critical deployment.
-
----
-
-## License
-
-License will be added later.
