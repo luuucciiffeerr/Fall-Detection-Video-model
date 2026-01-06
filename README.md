@@ -8,6 +8,7 @@
 ## 🎯 Features
 - **Trained on**: 6,988 fall/no-fall videos
 - **Model**: Simple3D CNN (PyTorch)
+-**Training Peak**: **91.8%**
 - **Test Results**: 71% accuracy, balanced F1-score
 - **Live prediction**: Any MP4 video
 
