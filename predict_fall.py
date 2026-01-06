@@ -60,14 +60,19 @@ class FallPredictor:
         print(f"Using device: {self.device}")
         
         self.model = Simple3DCNN().to(self.device)
-        self.model.load_state_dict(torch.load(model_path, map_location=self.device))
+        self.model.load_state_dict(torch.load(model_path, map_location=self.device, weights_only=False))
         self.model.eval()
         print(f"✅ Model loaded: {model_path}")
     
     def predict_single_video(self, video_path: str, threshold: float = 0.5):
         """Predict fall/no-fall on one video. Returns (prediction, confidence)."""
+        
         if not os.path.exists(video_path):
-            raise FileError(f"Video not found: {video_path}")
+            print(f"❌ Video not found: {video_path}")
+            print("Usage: python predict_fall.py path/to/real/video.mp4")
+            return None, 0.0
+
+        
         
         print(f"🎥 Analyzing: {video_path}")
         clip_np = load_clip(video_path)
