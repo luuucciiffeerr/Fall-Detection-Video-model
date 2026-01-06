@@ -1,0 +1,10 @@
+# Big data
+fall_dataset/
+*.log
+__pycache__/
+archive.zip
+# Env
+fall_detection/
+.env
+simple3dcnn_fall.pth 
+"*.pth" 
