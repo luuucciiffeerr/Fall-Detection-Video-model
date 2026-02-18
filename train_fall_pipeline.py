@@ -171,7 +171,7 @@ def load_clip(video_path: str, clip_len: int = 16, resize=(112, 112), augment=Fa
 
     clip = np.array(frames)
     if augment and np.random.rand() > 0.5:
-        clip = np.fliplr(clip)
+        clip = np.ascontiguousarray(np.fliplr(clip))
     return clip
 
 class FallVideoDataset(Dataset):
