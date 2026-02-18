@@ -1,3 +1,5 @@
+#v1.1.01
+
 import os
 import zipfile
 import cv2
@@ -8,7 +10,6 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score, f1_score, classification_report, confusion_matrix
 import seaborn as sns
 import matplotlib.pyplot as plt
-
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
@@ -18,8 +19,7 @@ ZIP_PATH = "archive.zip"
 EXTRACT_ROOT = "fall_dataset"
 VIDEOS_CSV = "videos_info.csv"
 TRAIN_CSV = "train.csv"
-VAL_CSV = "val.csv"
-TEST_CSV = "test.csv"
+TEST_CSV = "test.csv"  # No VAL_CSV anymore
 MODEL_PATH = "simple3dcnn_fall.pth"
 METRICS_PLOT = "training_metrics.png"
 CONFUSION_PLOT = "confusion_matrix.png"
@@ -30,7 +30,6 @@ RESIZE = (112, 112)
 BATCH_SIZE = 4
 NUM_EPOCHS = 10
 LR = 1e-4
-
 
 def ensure_unzipped(zip_path: str, extract_root: str) -> str:
     if os.path.exists(extract_root):
@@ -43,7 +42,6 @@ def ensure_unzipped(zip_path: str, extract_root: str) -> str:
         zf.extractall(extract_root)
     print("✓ Extraction complete")
     return extract_root
-
 
 def build_videos_csv(data_root: str, csv_path: str):
     """Walk dataset, find videos, extract metadata, save to CSV."""
@@ -64,7 +62,7 @@ def build_videos_csv(data_root: str, csv_path: str):
                 if "Fall" in parts:
                     label = 1
                     fall_count += 1
-                elif "No_Fall" in parts:
+                elif "No_Fall" in parts:  # Fixed: was "NoFall" but files use "No_Fall"
                     label = 0
                     nofall_count += 1
                 if label is not None:
@@ -78,7 +76,7 @@ def build_videos_csv(data_root: str, csv_path: str):
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             continue
-            
+        
         fps = cap.get(cv2.CAP_PROP_FPS)
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -96,29 +94,29 @@ def build_videos_csv(data_root: str, csv_path: str):
     df.to_csv(csv_path, index=False)
     print(f"💾 Saved {csv_path} ({len(df)} videos)")
     print("Class balance:", df['label'].value_counts().to_dict())
-    
 
-def split_datasets(videos_csv: str):
-    """Create train/val/test CSVs from videos_info.csv."""
-    if all(os.path.exists(p) for p in [TRAIN_CSV, VAL_CSV, TEST_CSV]):
+def split_datasets(videos_csv):
+    """Create train/test CSVs only: 80% train, 20% isolated test."""
+    if all(os.path.exists(p) for p in [TRAIN_CSV, TEST_CSV]):
         print("✓ Using existing splits")
         return
     
     df = pd.read_csv(videos_csv)
-    train_df, temp_df = train_test_split(df, test_size=0.4, stratify=df['label'], random_state=42)
-    val_df, test_df = train_test_split(temp_df, test_size=0.5, stratify=temp_df['label'], random_state=42)
+    
+    train_df, test_df = train_test_split(
+        df, 
+        test_size=0.2,
+        stratify=df['label'], 
+        random_state=42
+    )
     
     train_df.to_csv(TRAIN_CSV, index=False)
-    val_df.to_csv(VAL_CSV, index=False)
     test_df.to_csv(TEST_CSV, index=False)
     
-    print("📈 Splits created:")
-    print(f"  Train: {len(train_df)} ({train_df['label'].mean():.1%} fall)")
-    print(f"  Val:   {len(val_df)} ({val_df['label'].mean():.1%} fall)") 
-    print(f"  Test:  {len(test_df)} ({test_df['label'].mean():.1%} fall)")
+    print(f"✅ Splits created:")
+    print(f"Train: {len(train_df)} ({train_df['label'].mean():.1%} fall)")
+    print(f"Test:  {len(test_df)} ({test_df['label'].mean():.1%} fall)")
 
-
-# Dataset, Model, etc. (same as before)
 def load_clip(video_path: str, clip_len: int = 16, resize=(112, 112)):
     cap = cv2.VideoCapture(video_path)
     frames = []
@@ -127,7 +125,7 @@ def load_clip(video_path: str, clip_len: int = 16, resize=(112, 112)):
         if not ret: break
         frame = cv2.resize(frame, resize)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        frame = frame.astype(np.float32) / 255.0  # Fix: normalize early
+        frame = frame.astype(np.float32) / 255.0
         frames.append(frame)
     cap.release()
     
@@ -137,9 +135,7 @@ def load_clip(video_path: str, clip_len: int = 16, resize=(112, 112)):
     
     return np.array(frames)
 
-
-
-class FallVideoDataset(torch.utils.data.Dataset):  # Add full path
+class FallVideoDataset(Dataset):
     def __init__(self, csv_file: str, clip_len: int = 16):
         self.df = pd.read_csv(csv_file)
         self.clip_len = clip_len
@@ -151,19 +147,15 @@ class FallVideoDataset(torch.utils.data.Dataset):  # Add full path
         row = self.df.iloc[idx]
         clip_np = load_clip(row["path"], self.clip_len)
         if clip_np is None:
-            return None  # Skip bad videos
+            return None
         
-        clip = torch.from_numpy(clip_np).permute(3, 0, 1, 2)  # Use torch.from_numpy
+        clip = torch.from_numpy(clip_np).permute(3, 0, 1, 2).float()
         label = torch.tensor(int(row["label"]), dtype=torch.long)
         return clip, label
-
-
-
 
 def collate_fn(batch):
     batch = [b for b in batch if b is not None]
     return torch.utils.data.dataloader.default_collate(batch) if batch else None
-
 
 class Simple3DCNN(nn.Module):
     def __init__(self, num_classes=2):
@@ -182,11 +174,10 @@ class Simple3DCNN(nn.Module):
         x = self.features(x)
         return self.classifier(x)
 
-
 def train_epoch(model, loader, optimizer, criterion, device, train=True):
     model.train() if train else model.eval()
     total_loss, correct, total = 0.0, 0, 0
-    phase = "Train" if train else "Val"
+    phase = "Train" if train else "Test"  # Fixed: no val anymore
     pbar = tqdm(loader, desc=phase)
     
     for batch in pbar:
@@ -214,7 +205,6 @@ def train_epoch(model, loader, optimizer, criterion, device, train=True):
     
     return total_loss/max(total,1), correct/max(total,1)
 
-
 def evaluate_model(model, test_loader, device):
     """Full evaluation with metrics + confusion matrix."""
     model.eval()
@@ -241,7 +231,6 @@ def evaluate_model(model, test_loader, device):
     print("\nDetailed Report:")
     print(classification_report(all_labels, all_preds, target_names=['No_Fall', 'Fall']))
     
-    # Confusion Matrix
     cm = confusion_matrix(all_labels, all_preds)
     plt.figure(figsize=(6,5))
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
@@ -255,7 +244,6 @@ def evaluate_model(model, test_loader, device):
     
     return acc, f1
 
-
 def main():
     print("🚀 Fall Detection Training Pipeline")
     
@@ -267,14 +255,14 @@ def main():
     build_videos_csv(data_root, VIDEOS_CSV)
     split_datasets(VIDEOS_CSV)
     
-    # 2. Loaders
+    # 2. Loaders (FIXED: no val_loader)
     train_ds = FallVideoDataset(TRAIN_CSV)
-    val_ds = FallVideoDataset(VAL_CSV)
-    test_ds = FallVideoDataset(TEST_CSV)
+    test_ds  = FallVideoDataset(TEST_CSV)
     
-    train_loader = DataLoader(train_ds, BATCH_SIZE, True, collate_fn=collate_fn, num_workers=0)
-    val_loader = DataLoader(val_ds, BATCH_SIZE, False, collate_fn=collate_fn, num_workers=0)
-    test_loader = DataLoader(test_ds, BATCH_SIZE, False, collate_fn=collate_fn, num_workers=0)
+    train_loader = DataLoader(train_ds, BATCH_SIZE, True,  collate_fn=collate_fn, num_workers=0)
+    test_loader  = DataLoader(test_ds,  BATCH_SIZE, False, collate_fn=collate_fn, num_workers=0)
+    
+    print(f"Train batches: {len(train_loader)}, Test batches: {len(test_loader)}")
     
     # 3. Model
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -288,36 +276,34 @@ def main():
         print(f"🔄 Loading existing model from {MODEL_PATH}")
         model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
     
-    # 4. Train
+    # 4. Train (FIXED: no val losses/accs, proper appends)
     print("\n🎯 Starting training...")
     train_losses, train_accs = [], []
-    val_losses, val_accs = [], []
     
     for epoch in range(NUM_EPOCHS):
-        print(f"\nEpoch {epoch+1}/{NUM_EPOCHS}")
-        tl, ta = train_epoch(model, train_loader, optimizer, criterion, device, True)
-        vl, va = train_epoch(model, val_loader, optimizer, criterion, device, False)
+        print(f"Epoch {epoch+1}/{NUM_EPOCHS}")
         
-        train_losses.append(tl); train_accs.append(ta)
-        val_losses.append(vl); val_accs.append(va)
+        tl, ta = train_epoch(model, train_loader, optimizer, criterion, device, train=True)
+        train_losses.append(tl)
+        train_accs.append(ta)
         
-        print(f"  Train: loss={tl:.4f}, acc={ta:.3f} | Val: loss={vl:.4f}, acc={va:.3f}")
+        if (epoch + 1) % 5 == 0:
+            print("🔍 Quick test eval:")
+            test_acc, test_f1 = evaluate_model(model, test_loader, device)
     
     # 5. Save model
     torch.save(model.state_dict(), MODEL_PATH)
     print(f"💾 Model saved: {MODEL_PATH}")
     
-    # 6. Training charts
+    # 6. Training chart (FIXED: only train metrics)
     plt.figure(figsize=(12,4))
     plt.subplot(1,2,1)
     plt.plot(train_losses, label='Train Loss')
-    plt.plot(val_losses, label='Val Loss')
     plt.title('Loss')
     plt.legend()
     
     plt.subplot(1,2,2)
     plt.plot(train_accs, label='Train Acc')
-    plt.plot(val_accs, label='Val Acc')
     plt.title('Accuracy')
     plt.legend()
     plt.savefig(METRICS_PLOT, dpi=150, bbox_inches='tight')
@@ -325,11 +311,9 @@ def main():
     print(f"📈 Training charts saved: {METRICS_PLOT}")
     
     # 7. Final test evaluation
-    test_acc, test_f1 = evaluate_model(model, test_loader, device)
-    print("✅ Pipeline complete! Commit these files to GitHub:")
-    print("   videos_info.csv, train.csv, val.csv, test.csv")
-    print("   simple3dcnn_fall.pth, *.png")
-
+    print("\n🏆 FINAL TEST RESULTS:")
+    final_acc, final_f1 = evaluate_model(model, test_loader, device)
+    print("✅ Pipeline complete!")
 
 if __name__ == "__main__":
     main()
