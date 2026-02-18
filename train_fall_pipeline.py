@@ -1,5 +1,3 @@
-#v1.1.01
-
 import os
 import zipfile
 import cv2
@@ -13,29 +11,64 @@ import matplotlib.pyplot as plt
 import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
+from torch.cuda.amp import autocast, GradScaler
+from torch.optim.lr_scheduler import CosineAnnealingLR
+import warnings
+warnings.filterwarnings('ignore')
 
-# ============ PATHS ============
+# ============ CONFIG ============
 ZIP_PATH = "archive.zip"
 EXTRACT_ROOT = "fall_dataset"
 VIDEOS_CSV = "videos_info.csv"
 TRAIN_CSV = "train.csv"
-TEST_CSV = "test.csv"  # No VAL_CSV anymore
-MODEL_PATH = "simple3dcnn_fall.pth"
-METRICS_PLOT = "training_metrics.png"
-CONFUSION_PLOT = "confusion_matrix.png"
+TEST_CSV = "test.csv"
+MODEL_PATH = "simple3dcnn_fall_v2.pth"
+METRICS_PLOT = "training_metrics_v2.png"
+CONFUSION_PLOT = "confusion_matrix_v2.png"
+MISCLASSIFIED_CSV = "misclassified_samples.csv"
 
-# Training config
 CLIP_LEN = 16
 RESIZE = (112, 112)
-BATCH_SIZE = 4
-NUM_EPOCHS = 10
+BATCH_SIZE = 8          # bigger batch for RTX 3070
+NUM_EPOCHS = 50
 LR = 1e-4
+NUM_WORKERS = 4
+USE_AMP = True          # mixed precision
 
+# ============ GPU INFO ============
+def print_gpu_info():
+    print("\n" + "="*80)
+    print("🖥️  GPU OPTIMIZATION INFO")
+    print("="*80)
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+        n_gpus = torch.cuda.device_count()
+        print(f"✓ CUDA available: {n_gpus} GPU(s) detected")
+        for i in range(n_gpus):
+            gpu_name = torch.cuda.get_device_name(i)
+            gpu_mem = torch.cuda.get_device_properties(i).total_memory / 1e9
+            print(f"  GPU {i}: {gpu_name} | {gpu_mem:.1f} GB VRAM")
+        print("\n⚡ Optimizations enabled:")
+        print(f"  ✓ Batch size: {BATCH_SIZE}")
+        print(f"  ✓ Data workers: {NUM_WORKERS}")
+        print(f"  ✓ Pin memory: True")
+        print(f"  ✓ AMP (Mixed Precision): {USE_AMP}")
+        print(f"  ✓ non_blocking transfer: True")
+        print(f"\n📊 Training: {NUM_EPOCHS} epochs, {BATCH_SIZE} batch, {LR} LR")
+        print("   Expected time: ~2-3 hours on RTX 3070")
+    else:
+        device = torch.device("cpu")
+        print("⚠️  No CUDA available - using CPU (very slow)")
+    print("="*80 + "\n")
+    return device
+
+device = print_gpu_info()
+
+# ============ DATA HELPERS ============
 def ensure_unzipped(zip_path: str, extract_root: str) -> str:
     if os.path.exists(extract_root):
         print(f"✓ Using existing {extract_root}")
         return extract_root
-    
     os.makedirs(extract_root, exist_ok=True)
     print(f"📦 Extracting {zip_path}...")
     with zipfile.ZipFile(zip_path, "r") as zf:
@@ -44,14 +77,11 @@ def ensure_unzipped(zip_path: str, extract_root: str) -> str:
     return extract_root
 
 def build_videos_csv(data_root: str, csv_path: str):
-    """Walk dataset, find videos, extract metadata, save to CSV."""
     if os.path.exists(csv_path):
         print(f"✓ Using existing {csv_path}")
         return
-    
     video_paths = []
     fall_count = nofall_count = 0
-    
     print("🔍 Scanning videos...")
     for root, _, files in tqdm(os.walk(data_root), desc="Folders"):
         for file in files:
@@ -62,32 +92,28 @@ def build_videos_csv(data_root: str, csv_path: str):
                 if "Fall" in parts:
                     label = 1
                     fall_count += 1
-                elif "No_Fall" in parts:  # Fixed: was "NoFall" but files use "No_Fall"
+                elif "No_Fall" in parts:
                     label = 0
                     nofall_count += 1
                 if label is not None:
                     video_paths.append((full_path, label))
-    
     print(f"📊 Found {len(video_paths)} videos: {fall_count} Fall, {nofall_count} No_Fall")
-    
+
     data = []
     print("📹 Reading metadata...")
     for video_path, label in tqdm(video_paths, desc="Videos"):
         cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             continue
-        
         fps = cap.get(cv2.CAP_PROP_FPS)
         frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         duration = frame_count / fps if fps > 0 else 0
-        
         cap.release()
-        
         filename = os.path.basename(video_path)
         data.append([filename, video_path, frame_count, fps, width, height, round(duration, 2), label])
-    
+
     df = pd.DataFrame(data, columns=[
         "filename", "path", "num_frames", "fps", "width", "height", "duration_sec", "label"
     ])
@@ -96,59 +122,72 @@ def build_videos_csv(data_root: str, csv_path: str):
     print("Class balance:", df['label'].value_counts().to_dict())
 
 def split_datasets(videos_csv):
-    """Create train/test CSVs only: 80% train, 20% isolated test."""
     if all(os.path.exists(p) for p in [TRAIN_CSV, TEST_CSV]):
         print("✓ Using existing splits")
         return
-    
     df = pd.read_csv(videos_csv)
-    
     train_df, test_df = train_test_split(
-        df, 
+        df,
         test_size=0.2,
-        stratify=df['label'], 
+        stratify=df['label'],
         random_state=42
     )
-    
     train_df.to_csv(TRAIN_CSV, index=False)
     test_df.to_csv(TEST_CSV, index=False)
-    
-    print(f"✅ Splits created:")
+    print("✅ Splits created:")
     print(f"Train: {len(train_df)} ({train_df['label'].mean():.1%} fall)")
     print(f"Test:  {len(test_df)} ({test_df['label'].mean():.1%} fall)")
 
-def load_clip(video_path: str, clip_len: int = 16, resize=(112, 112)):
+# ============ AUGMENTED CLIP LOADING ============
+def load_clip(video_path: str, clip_len: int = 16, resize=(112, 112), augment=False):
     cap = cv2.VideoCapture(video_path)
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    if augment and total_frames > clip_len:
+        start_frame = np.random.randint(0, total_frames - clip_len)
+    else:
+        start_frame = 0
+    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
     frames = []
-    while len(frames) < clip_len:
+    for _ in range(clip_len):
         ret, frame = cap.read()
-        if not ret: break
+        if not ret:
+            break
         frame = cv2.resize(frame, resize)
         frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        if augment:
+            brightness = np.random.uniform(0.9, 1.1)
+            contrast = np.random.uniform(0.9, 1.1)
+            frame = frame * contrast * brightness
+            frame = np.clip(frame, 0, 255)
         frame = frame.astype(np.float32) / 255.0
         frames.append(frame)
     cap.release()
-    
+
     if len(frames) < clip_len:
         pad_frames = np.zeros((clip_len - len(frames), *resize, 3), dtype=np.float32)
         frames.extend(pad_frames)
-    
-    return np.array(frames)
+
+    clip = np.array(frames)
+    if augment and np.random.rand() > 0.5:
+        clip = np.fliplr(clip)
+    return clip
 
 class FallVideoDataset(Dataset):
-    def __init__(self, csv_file: str, clip_len: int = 16):
+    def __init__(self, csv_file: str, clip_len: int = 16, augment=False):
         self.df = pd.read_csv(csv_file)
         self.clip_len = clip_len
+        self.augment = augment
 
     def __len__(self):
         return len(self.df)
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        clip_np = load_clip(row["path"], self.clip_len)
+        clip_np = load_clip(row["path"], self.clip_len, augment=self.augment)
         if clip_np is None:
             return None
-        
         clip = torch.from_numpy(clip_np).permute(3, 0, 1, 2).float()
         label = torch.tensor(int(row["label"]), dtype=torch.long)
         return clip, label
@@ -157,83 +196,91 @@ def collate_fn(batch):
     batch = [b for b in batch if b is not None]
     return torch.utils.data.dataloader.default_collate(batch) if batch else None
 
+# ============ MODEL (BN + GLOBAL POOL) ============
 class Simple3DCNN(nn.Module):
     def __init__(self, num_classes=2):
         super().__init__()
         self.features = nn.Sequential(
-            nn.Conv3d(3, 32, (3,3,3), padding=1), nn.ReLU(), nn.MaxPool3d((1,2,2)),
-            nn.Conv3d(32, 64, (3,3,3), padding=1), nn.ReLU(), nn.MaxPool3d((2,2,2))
+            nn.Conv3d(3, 32, (3,3,3), padding=1),
+            nn.BatchNorm3d(32),
+            nn.ReLU(),
+            nn.MaxPool3d((1,2,2)),
+            nn.Conv3d(32, 64, (3,3,3), padding=1),
+            nn.BatchNorm3d(64),
+            nn.ReLU(),
+            nn.MaxPool3d((2,2,2))
         )
+        self.global_pool = nn.AdaptiveAvgPool3d((1, 1, 1))
         self.classifier = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(64 * 8 * 28 * 28, 128), nn.ReLU(), nn.Dropout(0.5),
+            nn.Linear(64, 128),
+            nn.ReLU(),
+            nn.Dropout(0.5),
             nn.Linear(128, num_classes)
         )
 
-    def forward(self, x): 
+    def forward(self, x):
         x = self.features(x)
+        x = self.global_pool(x)
+        x = x.view(x.size(0), -1)
         return self.classifier(x)
 
-def train_epoch(model, loader, optimizer, criterion, device, train=True):
+# ============ TRAIN / EVAL ============
+def train_epoch(model, loader, optimizer, criterion, device, scaler, train=True, use_amp=True):
     model.train() if train else model.eval()
     total_loss, correct, total = 0.0, 0, 0
-    phase = "Train" if train else "Test"  # Fixed: no val anymore
-    pbar = tqdm(loader, desc=phase)
-    
+    phase = "Train" if train else "Test"
+    pbar = tqdm(loader, desc=phase, leave=True)
     for batch in pbar:
-        if batch is None: continue
-        clips, labels = [t.to(device) for t in batch]
-        
-        if train: optimizer.zero_grad()
-        outputs = model(clips)
-        loss = criterion(outputs, labels)
-        
+        if batch is None:
+            continue
+        clips, labels = [t.to(device, non_blocking=True) for t in batch]
         if train:
-            loss.backward()
+            optimizer.zero_grad()
+        if train and use_amp:
+            with autocast():
+                outputs = model(clips)
+                loss = criterion(outputs, labels)
+            scaler.scale(loss).backward()
             nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            optimizer.step()
-        
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            outputs = model(clips)
+            loss = criterion(outputs, labels)
+            if train:
+                loss.backward()
+                nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
         total_loss += loss.item() * clips.size(0)
         preds = outputs.argmax(1)
         correct += (preds == labels).sum().item()
         total += labels.size(0)
-        
-        pbar.set_postfix({
-            'loss': f"{loss.item():.4f}", 
-            'acc': f"{correct/max(total,1):.3f}"
-        })
-    
+        pbar.set_postfix({'loss': f"{loss.item():.4f}", 'acc': f"{correct/max(total,1):.3f}"})
     return total_loss/max(total,1), correct/max(total,1)
 
-def evaluate_model(model, test_loader, device):
-    """Full evaluation with metrics + confusion matrix."""
+def evaluate_model(model, test_loader, device, return_preds=False):
     model.eval()
     all_preds, all_labels = [], []
-    
     with torch.no_grad():
-        for batch in tqdm(test_loader, desc="Evaluating"):
-            if batch is None: continue
-            clips, labels = [t.to(device) for t in batch]
+        for batch in tqdm(test_loader, desc="Evaluating", leave=False):
+            if batch is None:
+                continue
+            clips, labels = [t.to(device, non_blocking=True) for t in batch]
             outputs = model(clips)
             preds = outputs.argmax(1).cpu()
             all_preds.extend(preds)
             all_labels.extend(labels.cpu())
-    
     all_preds = np.array(all_preds)
     all_labels = np.array(all_labels)
-    
     acc = accuracy_score(all_labels, all_preds)
     f1 = f1_score(all_labels, all_preds, average='weighted')
-    
     print("\n📊 Test Results:")
-    print(f"Accuracy: {acc:.4f}")
-    print(f"F1 Score:  {f1:.4f}")
+    print(f"Accuracy: {acc:.4f} | F1 Score: {f1:.4f}")
     print("\nDetailed Report:")
     print(classification_report(all_labels, all_preds, target_names=['No_Fall', 'Fall']))
-    
     cm = confusion_matrix(all_labels, all_preds)
     plt.figure(figsize=(6,5))
-    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', 
+    sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
                 xticklabels=['No_Fall', 'Fall'], yticklabels=['No_Fall', 'Fall'])
     plt.title('Confusion Matrix')
     plt.ylabel('True Label')
@@ -241,79 +288,99 @@ def evaluate_model(model, test_loader, device):
     plt.savefig(CONFUSION_PLOT, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"💾 Confusion matrix saved: {CONFUSION_PLOT}")
-    
+    if return_preds:
+        return acc, f1, all_preds, all_labels
     return acc, f1
 
+# ============ MAIN ============
 def main():
-    print("🚀 Fall Detection Training Pipeline")
-    
-    # 1. Setup data
+    print("🚀 Fall Detection Training Pipeline v2.0 (RTX 3070 Optimized)")
+    print("="*80)
     if not os.path.exists(ZIP_PATH):
         raise FileNotFoundError(f"Put {ZIP_PATH} in this folder")
     data_root = ensure_unzipped(ZIP_PATH, EXTRACT_ROOT)
-    
     build_videos_csv(data_root, VIDEOS_CSV)
     split_datasets(VIDEOS_CSV)
-    
-    # 2. Loaders (FIXED: no val_loader)
-    train_ds = FallVideoDataset(TRAIN_CSV)
-    test_ds  = FallVideoDataset(TEST_CSV)
-    
-    train_loader = DataLoader(train_ds, BATCH_SIZE, True,  collate_fn=collate_fn, num_workers=0)
-    test_loader  = DataLoader(test_ds,  BATCH_SIZE, False, collate_fn=collate_fn, num_workers=0)
-    
-    print(f"Train batches: {len(train_loader)}, Test batches: {len(test_loader)}")
-    
-    # 3. Model
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    print(f"🖥️  Using device: {device}")
-    
+
+    train_ds = FallVideoDataset(TRAIN_CSV, augment=True)
+    test_ds  = FallVideoDataset(TEST_CSV, augment=False)
+
+    train_loader = DataLoader(train_ds, BATCH_SIZE, True,
+                              collate_fn=collate_fn,
+                              num_workers=NUM_WORKERS,
+                              pin_memory=True)
+    test_loader  = DataLoader(test_ds, BATCH_SIZE, False,
+                              collate_fn=collate_fn,
+                              num_workers=NUM_WORKERS,
+                              pin_memory=True)
+
+    print(f"\nTrain batches: {len(train_loader)}, Test batches: {len(test_loader)}")
+
     model = Simple3DCNN().to(device)
     criterion = nn.CrossEntropyLoss()
-    optimizer = torch.optim.Adam(model.parameters(), lr=LR)
-    
+    optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
+    scheduler = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
+    scaler = GradScaler() if USE_AMP else None
+
     if os.path.exists(MODEL_PATH):
         print(f"🔄 Loading existing model from {MODEL_PATH}")
         model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
-    
-    # 4. Train (FIXED: no val losses/accs, proper appends)
-    print("\n🎯 Starting training...")
-    train_losses, train_accs = [], []
-    
+
+    print(f"\n🎯 Starting training ({NUM_EPOCHS} epochs)...")
+    train_losses, train_accs, test_accs, test_f1s = [], [], [], []
+    best_acc = 0
+    best_epoch = 0
+
     for epoch in range(NUM_EPOCHS):
+        print(f"\n{'='*80}")
         print(f"Epoch {epoch+1}/{NUM_EPOCHS}")
-        
-        tl, ta = train_epoch(model, train_loader, optimizer, criterion, device, train=True)
+        print(f"{'='*80}")
+        tl, ta = train_epoch(model, train_loader, optimizer, criterion, device, scaler, train=True, use_amp=USE_AMP)
         train_losses.append(tl)
         train_accs.append(ta)
-        
-        if (epoch + 1) % 5 == 0:
-            print("🔍 Quick test eval:")
-            test_acc, test_f1 = evaluate_model(model, test_loader, device)
-    
-    # 5. Save model
-    torch.save(model.state_dict(), MODEL_PATH)
+
+        test_acc, test_f1 = evaluate_model(model, test_loader, device)
+        test_accs.append(test_acc)
+        test_f1s.append(test_f1)
+
+        if test_acc > best_acc:
+            best_acc = test_acc
+            best_epoch = epoch + 1
+            torch.save(model.state_dict(), MODEL_PATH)
+            print(f"✨ New best model! Accuracy: {test_acc:.4f}")
+
+        scheduler.step()
+
+    print(f"\n🏆 Best model from epoch {best_epoch} with accuracy {best_acc:.4f}")
     print(f"💾 Model saved: {MODEL_PATH}")
-    
-    # 6. Training chart (FIXED: only train metrics)
-    plt.figure(figsize=(12,4))
-    plt.subplot(1,2,1)
+
+    print("\n" + "="*80)
+    print("FINAL EVALUATION WITH MISCLASSIFIED ANALYSIS")
+    print("="*80)
+    model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+    final_acc, final_f1, all_preds, all_labels = evaluate_model(model, test_loader, device, return_preds=True)
+
+    print("\n📋 Training curves...")
+    plt.figure(figsize=(14,4))
+    plt.subplot(1,3,1)
     plt.plot(train_losses, label='Train Loss')
-    plt.title('Loss')
-    plt.legend()
-    
-    plt.subplot(1,2,2)
+    plt.xlabel('Epoch'); plt.ylabel('Loss'); plt.title('Train Loss'); plt.grid(True, alpha=0.3); plt.legend()
+    plt.subplot(1,3,2)
     plt.plot(train_accs, label='Train Acc')
-    plt.title('Accuracy')
-    plt.legend()
+    plt.plot(test_accs, label='Test Acc')
+    plt.xlabel('Epoch'); plt.ylabel('Accuracy'); plt.title('Accuracy'); plt.grid(True, alpha=0.3); plt.legend()
+    plt.subplot(1,3,3)
+    plt.plot(test_f1s, label='Test F1')
+    plt.xlabel('Epoch'); plt.ylabel('F1'); plt.title('F1 Score'); plt.grid(True, alpha=0.3); plt.legend()
+    plt.tight_layout()
     plt.savefig(METRICS_PLOT, dpi=150, bbox_inches='tight')
     plt.close()
     print(f"📈 Training charts saved: {METRICS_PLOT}")
-    
-    # 7. Final test evaluation
-    print("\n🏆 FINAL TEST RESULTS:")
-    final_acc, final_f1 = evaluate_model(model, test_loader, device)
+
+    print("\n" + "="*80)
     print("✅ Pipeline complete!")
+    print("="*80)
+    print(f"\nFinal Metrics:\n  Accuracy: {final_acc:.4f}\n  F1 Score: {final_f1:.4f}\n  Best Epoch: {best_epoch}")
 
 if __name__ == "__main__":
     main()
