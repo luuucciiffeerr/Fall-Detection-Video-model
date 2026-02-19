@@ -3,6 +3,9 @@ import os
 #from pyexpat import model
 import zipfile
 import cv2
+os.environ["OPENCV_VIDEOIO_PRIORITY_FFMPEG"] = "1000"  # FFmpeg first
+os.environ["OPENCV_VIDEOIO_PRIORITY_GSTREAMER"] = "0"   # GStreamer last/disabled
+cv2.setLogLevel(3)  # quiet OpenCV
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -16,6 +19,8 @@ from torch.utils.data import Dataset, DataLoader
 from torch.cuda.amp import autocast, GradScaler
 from torch.optim.lr_scheduler import CosineAnnealingLR
 import warnings
+import logging
+logging.getLogger("cv2").setLevel(logging.ERROR)
 warnings.filterwarnings('ignore')
 
 # ============ CONFIG ============
@@ -35,7 +40,7 @@ RESIZE = (112, 112)
 BATCH_SIZE = 8          # bigger batch for RTX 3070
 NUM_EPOCHS = 50
 LR = 1e-4
-NUM_WORKERS = 0         # was originally 4
+NUM_WORKERS = 5        # was originally 4
 USE_AMP = True          # mixed precision
 
 # ============ GPU INFO ============
