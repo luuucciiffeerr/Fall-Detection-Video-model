@@ -35,7 +35,7 @@ RESIZE = (112, 112)
 BATCH_SIZE = 8          # bigger batch for RTX 3070
 NUM_EPOCHS = 50
 LR = 1e-4
-NUM_WORKERS = 4
+NUM_WORKERS = 0         # was originally 4
 USE_AMP = True          # mixed precision
 
 # ============ GPU INFO ============
