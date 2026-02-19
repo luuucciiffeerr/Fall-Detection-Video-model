@@ -1,4 +1,6 @@
+#v1.2.01
 import os
+#from pyexpat import model
 import zipfile
 import cv2
 import numpy as np
@@ -23,6 +25,7 @@ VIDEOS_CSV = "videos_info.csv"
 TRAIN_CSV = "train.csv"
 TEST_CSV = "test.csv"
 MODEL_PATH = "simple3dcnn_fall_v2.pth"
+CHECKPOINT_PATH = "simple3dcnn_fall_checkpoint.pth"
 METRICS_PLOT = "training_metrics_v2.png"
 CONFUSION_PLOT = "confusion_matrix_v2.png"
 MISCLASSIFIED_CSV = "misclassified_samples.csv"
@@ -184,13 +187,31 @@ class FallVideoDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx):
-        row = self.df.iloc[idx]
-        clip_np = load_clip(row["path"], self.clip_len, augment=self.augment)
-        if clip_np is None:
-            return None
-        clip = torch.from_numpy(clip_np).permute(3, 0, 1, 2).float()
-        label = torch.tensor(int(row["label"]), dtype=torch.long)
-        return clip, label
+        # try a few nearby indices if loading fails
+        orig_idx = idx
+        for _ in range(3):
+            row = self.df.iloc[idx]
+            path = row["path"]
+            label_val = int(row["label"])
+
+            try:
+                clip_np = load_clip(path, self.clip_len, augment=self.augment)
+                if clip_np is None:
+                    raise ValueError("Empty clip returned")
+
+                clip = torch.from_numpy(clip_np).permute(3, 0, 1, 2).float()
+                label = torch.tensor(label_val, dtype=torch.long)
+                return clip, label
+
+            except Exception as e:
+                print(f"[WARN] failed to load {path}: {e}")
+                # move to next sample
+                idx = (idx + 1) % len(self.df)
+
+        # if all retries failed, either:
+        # 1) raise cleanly (recommended for debugging)
+        raise RuntimeError(f"Could not load any clip for original idx {orig_idx}")
+        # or 2) return a dummy tensor with random noise / zeros and the label
 
 def collate_fn(batch):
     batch = [b for b in batch if b is not None]
@@ -225,12 +246,19 @@ class Simple3DCNN(nn.Module):
         return self.classifier(x)
 
 # ============ TRAIN / EVAL ============
-def train_epoch(model, loader, optimizer, criterion, device, scaler, train=True, use_amp=True):
+def train_epoch(model, loader, optimizer, criterion, device, scaler, train=True, use_amp=True, epoch=None, num_epochs=None):
     model.train() if train else model.eval()
     total_loss, correct, total = 0.0, 0, 0
     phase = "Train" if train else "Test"
-    pbar = tqdm(loader, desc=phase, leave=True)
+
+    if epoch is not None and num_epochs is not None:
+        desc = f"{phase} E{epoch+1}/{num_epochs}"
+    else:
+        desc = phase
+
+    pbar = tqdm(loader, desc=desc, leave=True)
     for batch in pbar:
+        
         if batch is None:
             continue
         clips, labels = [t.to(device, non_blocking=True) for t in batch]
@@ -258,11 +286,17 @@ def train_epoch(model, loader, optimizer, criterion, device, scaler, train=True,
         pbar.set_postfix({'loss': f"{loss.item():.4f}", 'acc': f"{correct/max(total,1):.3f}"})
     return total_loss/max(total,1), correct/max(total,1)
 
-def evaluate_model(model, test_loader, device, return_preds=False):
+def evaluate_model(model, test_loader, device, return_preds=False, epoch=None, num_epochs=None):
     model.eval()
     all_preds, all_labels = [], []
+
+    if epoch is not None and num_epochs is not None:
+        desc = f"Eval  E{epoch+1}/{num_epochs}"
+    else:
+        desc = "Evaluating"
+
     with torch.no_grad():
-        for batch in tqdm(test_loader, desc="Evaluating", leave=False):
+        for batch in tqdm(test_loader, desc=desc, leave=False):
             if batch is None:
                 continue
             clips, labels = [t.to(device, non_blocking=True) for t in batch]
@@ -316,40 +350,93 @@ def main():
 
     print(f"\nTrain batches: {len(train_loader)}, Test batches: {len(test_loader)}")
 
+
+
+
     model = Simple3DCNN().to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = torch.optim.Adam(model.parameters(), lr=LR, weight_decay=1e-4)
     scheduler = CosineAnnealingLR(optimizer, T_max=NUM_EPOCHS)
     scaler = GradScaler() if USE_AMP else None
 
-    if os.path.exists(MODEL_PATH):
-        print(f"🔄 Loading existing model from {MODEL_PATH}")
-        model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+    start_epoch = 0
 
-    print(f"\n🎯 Starting training ({NUM_EPOCHS} epochs)...")
+    # Prefer full checkpoint for resume
+    if os.path.exists(CHECKPOINT_PATH):
+        print(f"🔄 Resuming from checkpoint: {CHECKPOINT_PATH}")
+        ckpt = torch.load(CHECKPOINT_PATH, map_location=device)
+        model.load_state_dict(ckpt["model_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        scheduler.load_state_dict(ckpt["scheduler_state_dict"])
+        if USE_AMP and "scaler_state_dict" in ckpt:
+            scaler.load_state_dict(ckpt["scaler_state_dict"])
+        start_epoch = ckpt["epoch"] + 1
+        print(f"➡️  Continuing from epoch {start_epoch+1}")
+    elif os.path.exists(MODEL_PATH):
+        # Fallback: only weights, fresh optimizer
+        print(f"🔄 Loading existing model weights from {MODEL_PATH}")
+        model.load_state_dict(torch.load(MODEL_PATH, map_location=device))
+        start_epoch = 0  # or set manually if you know last epoch
+    else:
+        print("🆕 Starting from scratch")
+
+    print(f"\n🎯 Training from epoch {start_epoch+1} to {NUM_EPOCHS}...")
+
+    
+    
+    
+    
+    
     train_losses, train_accs, test_accs, test_f1s = [], [], [], []
     best_acc = 0
     best_epoch = 0
 
-    for epoch in range(NUM_EPOCHS):
+    for epoch in range(start_epoch, NUM_EPOCHS):
         print(f"\n{'='*80}")
         print(f"Epoch {epoch+1}/{NUM_EPOCHS}")
         print(f"{'='*80}")
-        tl, ta = train_epoch(model, train_loader, optimizer, criterion, device, scaler, train=True, use_amp=USE_AMP)
+
+        tl, ta = train_epoch(model, train_loader, optimizer, criterion, device, scaler, train=True, use_amp=USE_AMP, epoch=epoch, num_epochs=NUM_EPOCHS)
+
         train_losses.append(tl)
         train_accs.append(ta)
 
-        test_acc, test_f1 = evaluate_model(model, test_loader, device)
+        test_acc, test_f1 = evaluate_model(model, test_loader, device, return_preds=False, epoch=epoch, num_epochs=NUM_EPOCHS)
+        print(f"\n📣 Epoch {epoch+1}/{NUM_EPOCHS} summary:")
+        print(f"   Train Loss: {tl:.4f}")
+        print(f"   Train Acc : {ta:.4f}")
+        print(f"   Test  Acc : {test_acc:.4f}")
+        print(f"   Test  F1  : {test_f1:.4f}")
+        
         test_accs.append(test_acc)
         test_f1s.append(test_f1)
 
+    
+
+        # Save best model weights
         if test_acc > best_acc:
             best_acc = test_acc
             best_epoch = epoch + 1
             torch.save(model.state_dict(), MODEL_PATH)
             print(f"✨ New best model! Accuracy: {test_acc:.4f}")
+        print(f"   Best Acc so far: {best_acc:.4f} (epoch {best_epoch})")
+
+        # Save full checkpoint for resume
+        ckpt = {
+            "epoch": epoch,
+            "model_state_dict": model.state_dict(),
+            "optimizer_state_dict": optimizer.state_dict(),
+            "scheduler_state_dict": scheduler.state_dict(),
+        }
+        if USE_AMP:
+            ckpt["scaler_state_dict"] = scaler.state_dict()
+        torch.save(ckpt, CHECKPOINT_PATH)
 
         scheduler.step()
+
+            
+            
+        
 
     print(f"\n🏆 Best model from epoch {best_epoch} with accuracy {best_acc:.4f}")
     print(f"💾 Model saved: {MODEL_PATH}")
