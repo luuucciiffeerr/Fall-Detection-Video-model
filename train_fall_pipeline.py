@@ -70,7 +70,7 @@ def print_gpu_info():
     print("="*80 + "\n")
     return device
 
-device = print_gpu_info()
+# device = print_gpu_info()
 
 # ============ DATA HELPERS ============
 def ensure_unzipped(zip_path: str, extract_root: str) -> str:
@@ -355,7 +355,7 @@ def main():
 
     print(f"\nTrain batches: {len(train_loader)}, Test batches: {len(test_loader)}")
 
-
+    device = print_gpu_info()
 
 
     model = Simple3DCNN().to(device)
