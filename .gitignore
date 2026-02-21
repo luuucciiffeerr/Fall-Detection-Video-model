@@ -1,5 +1,6 @@
 # Big data
 fall_dataset/
+falldataset/
 *.log
 __pycache__/
 archive.zip
