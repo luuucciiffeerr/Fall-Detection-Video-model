@@ -55,16 +55,15 @@ class FallVideoDataset(Dataset):
         filename = row['filename']
         label = row['label']
 
-        # Remove .mp4 extension if present for folder name
-        folder_name = filename.replace('.mp4', '')
-
         # Get video info
         video_info = self.video_df.loc[filename]
         total_frames = int(video_info['num_frames'])  # FIXED: num_frames
         fps = int(video_info['fps'])
 
-        # Build video path - FIXED: correct path structure
-        video_path = self.dataset_folder / folder_name / 'Raw_Video' / filename
+        # Build video path - FIXED for actual structure
+        # Structure: falldataset/Fall/Raw_Video/filename.mp4 OR falldataset/No_Fall/Raw_Video/filename.mp4
+        label_folder = 'Fall' if label == 1 else 'No_Fall'
+        video_path = self.dataset_folder / label_folder / 'Raw_Video' / filename
 
         if not video_path.exists():
             raise FileNotFoundError(f"Video not found: {video_path}")
