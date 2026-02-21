@@ -54,12 +54,12 @@ class FallVideoDataset(Dataset):
         filename = row['filename']
         label = row['label']
 
-        # Get video info - FIXED: use the same video_df row, not index-based
+        # Get video info - handle floats
         video_row = self.video_df[self.video_df['filename'] == filename].iloc[0]
-        total_frames = int(video_row['num_frames'])
-        fps = int(video_row['fps'])
+        total_frames = int(float(video_row['num_frames']))  # Convert float to int
+        fps = int(float(video_row['fps']))
 
-        # Build video path using label to determine folder
+        # Build video path
         label_folder = 'Fall' if label == 1 else 'No_Fall'
         video_path = self.dataset_folder / label_folder / 'Raw_Video' / filename
 
@@ -70,7 +70,7 @@ class FallVideoDataset(Dataset):
         clip = self._load_clip(str(video_path), total_frames, label)
 
         if clip is None:
-            raise RuntimeError(f"Could not load clip for {filename}")
+            raise RuntimeError(f"Could not load clip for {filename} - may be corrupted")
 
         # Convert to tensor
         clip_transposed = np.transpose(clip, (3, 0, 1, 2))
@@ -78,8 +78,8 @@ class FallVideoDataset(Dataset):
 
         return clip_tensor, label
 
-    def _load_clip(self, video_path, total_frames, label, max_attempts=3):
-        """Load video clip with smart sampling"""
+    def _load_clip(self, video_path, total_frames, label, max_attempts=5):
+        """Load video clip with smart sampling - ROBUST"""
         for attempt in range(max_attempts):
             try:
                 cap = cv2.VideoCapture(video_path)
@@ -87,15 +87,21 @@ class FallVideoDataset(Dataset):
                     cap.release()
                     continue
 
-                # Smart sampling: Falls from latter half
-                if label == 1:
-                    start_frame = max(0, int(total_frames * 0.5))
-                    end_frame = total_frames
-                else:
+                # Get actual frame count from video
+                actual_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                if actual_frames <= 0:
+                    actual_frames = total_frames
+
+                # Smart sampling
+                if label == 1:  # Fall
+                    start_frame = max(0, int(actual_frames * 0.5))
+                    end_frame = actual_frames
+                else:  # No_Fall
                     start_frame = 0
-                    end_frame = total_frames
+                    end_frame = actual_frames
 
                 available_range = max(1, end_frame - start_frame)
+
                 if available_range >= CLIP_LEN:
                     sampled_indices = np.sort(np.random.choice(
                         range(start_frame, end_frame), 
@@ -104,7 +110,7 @@ class FallVideoDataset(Dataset):
                     ))
                 else:
                     sampled_indices = np.sort(np.random.choice(
-                        range(start_frame, end_frame),
+                        range(start_frame, min(end_frame, actual_frames)),
                         size=CLIP_LEN,
                         replace=True
                     ))
@@ -114,9 +120,17 @@ class FallVideoDataset(Dataset):
                     cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_idx))
                     ret, frame = cap.read()
 
-                    if not ret:
-                        cap.release()
-                        return None
+                    if not ret or frame is None:
+                        # Try next frame if this one fails
+                        for offset in range(1, 5):
+                            cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_idx + offset))
+                            ret, frame = cap.read()
+                            if ret and frame is not None:
+                                break
+
+                        if not ret or frame is None:
+                            cap.release()
+                            break
 
                     frame = cv2.resize(frame, (IMG_SIZE, IMG_SIZE))
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
@@ -126,6 +140,12 @@ class FallVideoDataset(Dataset):
 
                 if len(frames) == CLIP_LEN:
                     return np.array(frames, dtype=np.uint8)
+                else:
+                    # Pad with last frame if needed
+                    if len(frames) > 0:
+                        while len(frames) < CLIP_LEN:
+                            frames.append(frames[-1])
+                        return np.array(frames[:CLIP_LEN], dtype=np.uint8)
 
             except Exception as e:
                 if attempt < max_attempts - 1:
@@ -220,7 +240,7 @@ def eval_epoch(model, test_loader, criterion, device):
 # ================================================================================
 def main():
     print("=" * 80)
-    print(" " * 20 + "Fall Detection Training Pipeline v3.0 - FINAL FIX")
+    print(" " * 20 + "Fall Detection Training Pipeline v3.0 - ROBUST")
     print(" " * 15 + "R(2+1)D-18 + Class Weighting + Smart Sampling")
     print("=" * 80)
 
