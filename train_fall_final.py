@@ -1,7 +1,6 @@
 import warnings
 import os
 
-# Suppress OpenCV GStreamer warnings
 os.environ['OPENCV_LOG_LEVEL'] = 'OFF'
 os.environ['GSTREAMER_DEBUG'] = '0'
 
@@ -43,7 +42,7 @@ torch.manual_seed(SEED)
 class FallVideoDataset(Dataset):
     def __init__(self, csv_path, video_csv_path, dataset_folder, transform=None):
         self.df = pd.read_csv(csv_path)
-        self.video_df = pd.read_csv(video_csv_path).set_index('filename')
+        self.video_df = pd.read_csv(video_csv_path)
         self.dataset_folder = Path(dataset_folder)
         self.transform = transform
 
@@ -55,13 +54,12 @@ class FallVideoDataset(Dataset):
         filename = row['filename']
         label = row['label']
 
-        # Get video info
-        video_info = self.video_df.loc[filename]
-        total_frames = int(video_info['num_frames'])  # FIXED: num_frames
-        fps = int(video_info['fps'])
+        # Get video info - FIXED: use the same video_df row, not index-based
+        video_row = self.video_df[self.video_df['filename'] == filename].iloc[0]
+        total_frames = int(video_row['num_frames'])
+        fps = int(video_row['fps'])
 
-        # Build video path - FIXED for actual structure
-        # Structure: falldataset/Fall/Raw_Video/filename.mp4 OR falldataset/No_Fall/Raw_Video/filename.mp4
+        # Build video path using label to determine folder
         label_folder = 'Fall' if label == 1 else 'No_Fall'
         video_path = self.dataset_folder / label_folder / 'Raw_Video' / filename
 
@@ -72,10 +70,10 @@ class FallVideoDataset(Dataset):
         clip = self._load_clip(str(video_path), total_frames, label)
 
         if clip is None:
-            raise RuntimeError(f"Could not load any clip for original idx {idx}: Failed to read video")
+            raise RuntimeError(f"Could not load clip for {filename}")
 
         # Convert to tensor
-        clip_transposed = np.transpose(clip, (3, 0, 1, 2))  # FIXED: transpose not permute
+        clip_transposed = np.transpose(clip, (3, 0, 1, 2))
         clip_tensor = torch.from_numpy(clip_transposed).float()
 
         return clip_tensor, label
@@ -90,14 +88,13 @@ class FallVideoDataset(Dataset):
                     continue
 
                 # Smart sampling: Falls from latter half
-                if label == 1:  # Fall
+                if label == 1:
                     start_frame = max(0, int(total_frames * 0.5))
                     end_frame = total_frames
-                else:  # No_Fall - uniform random
+                else:
                     start_frame = 0
                     end_frame = total_frames
 
-                # Sample frame indices
                 available_range = max(1, end_frame - start_frame)
                 if available_range >= CLIP_LEN:
                     sampled_indices = np.sort(np.random.choice(
@@ -114,14 +111,13 @@ class FallVideoDataset(Dataset):
 
                 frames = []
                 for frame_idx in sampled_indices:
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, frame_idx)
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_idx))
                     ret, frame = cap.read()
 
                     if not ret:
                         cap.release()
                         return None
 
-                    # Resize to IMG_SIZE x IMG_SIZE
                     frame = cv2.resize(frame, (IMG_SIZE, IMG_SIZE))
                     frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                     frames.append(frame)
@@ -296,18 +292,15 @@ def main():
     print(f"Train batches: {len(train_loader)}")
     print(f"Test batches: {len(test_loader)}")
 
-    # Compute class weights - AGGRESSIVE for Fall detection
+    # Compute class weights
     print("")
     print("Computing class weights...")
     train_labels = train_dataset.df['label'].values
     class_counts = np.bincount(train_labels)
 
-    # FIXED: AGGRESSIVE weights to force Fall learning
     weights = 1.0 / (class_counts / class_counts.sum())
     weights = weights / weights.sum() * len(weights)
-
-    # Extra boost for Fall class
-    weights[1] *= 3.0  # 3x penalty for missing Falls
+    weights[1] *= 3.0
 
     print(f"Class weights: No_Fall={weights[0]:.3f}, Fall={weights[1]:.3f}")
 
@@ -316,7 +309,6 @@ def main():
     print("Initializing model...")
     model = get_model(num_classes=2).to(DEVICE)
 
-    # Count trainable params
     trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
     print(f"Model loaded | Trainable params: {trainable_params:,}")
 
