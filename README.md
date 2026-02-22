@@ -1,9 +1,5 @@
 # 🎯 Folio Finder AI — Video-Based Fall Detection
 
-[
-[
-[
-[
 
 A deep learning system for real-time fall detection from video using the **R(2+1)D-18** spatiotemporal convolutional neural network. Achieves **98.71% F1 score** on a custom dataset of ~7,000 video clips.
 
@@ -293,9 +289,8 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 ## 👥 Authors
 
-- **[________________]** — [________________]
-- **[________________]** — [________________]
-- **[________________]** — [________________]
+-Morteza Mohasebati    
+-Ali Abroudoust
 
 ***
 
@@ -314,7 +309,4 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 ---
 
-## References
-
-1. [confusion_matrix_v2.jpg](https://ppl-ai-file-upload.s3.amazonaws.com/web/direct-files/attachments/images/153973296/10bccf11-8ace-49f2-8a78-b7230d32864a/confusion_matrix_v2.jpg?AWSAccessKeyId=ASIA2F3EMEYE62KGSXQ7&Signature=M9%2FQm9TO%2BoGzoc%2F0aGYgzzeRCXg%3D&x-amz-security-token=IQoJb3JpZ2luX2VjEAMaCXVzLWVhc3QtMSJHMEUCIElip0qjLX%2BEajuB2vsOZv71ivvt6Il4IemIEFTl8S8kAiEAv1a991OPEjaRuonvjIIIXZMmZfCAghb3cEy6NeSwuqAq%2FAQIzP%2F%2F%2F%2F%2F%2F%2F%2F%2F%2FARABGgw2OTk3NTMzMDk3MDUiDMA1vQln2ZHOTpCZRirQBPzQE7VMG72pwMgYTqyVstLK%2FH821Zbat4Xs24ElzLmEK3SFzxvjMmMSDGCR2nhr4A1hPCW715cAAK16B3CSvskuXoH%2Bofj0sNZqrmGbUB2rwqjjUXCt2nfA%2BaJwBP6W1iIYejODN8cR2I%2FgBHneMfzner0hAeYOcEaDjaYxR8FfuBrAHU3LZMq5xCV09FwpYro4pdL8x4eeMvRH38ZU7E37ly1xz%2F6M77cWsZq%2Fhdq%2BaNVeMq0Nmo971bL5o3Mq9BqYi6ohKMsjosARvHl0AgXnjL0I40Vn0zOzM1zicpIoYOUrEguE1R2FCxLV%2BfN30GUTba%2BEk0001fiRJmX68sHXQtNE7uIise8xB2vCN4Zpcv9zc5HvyQP6PAZjtlD82yXfOR4ry9m1ahZmqsXgUQaDLioottsXC1fGgQPPVYBJ3JhT2AgSvTXeHknC98iC%2BOSvKuO8VfDrmxPT7c7yCdcdeSpE6IhyiueSB%2BOH4vPjDUxqg4pFMgakxrrINdECHtzQUGZyyc6tmBNakCJ%2FzMANYnTrvFYy3UnMrsd5FqYnIL%2BYpsJQCOg5Xea75FuEBnGZE69zZLeDn70wYihpBYtTzxxzlW4KgHl%2BfNFXTyfns2P2HRyXeTliP%2FRCseVl1nLsbtvKrqj8RjGrXpwC4VdeGMwl8vNhSHjOAzPnGmwY%2FaExOAYJM0XFaTzfHRu7tQSsKb3HMqQsSjf6RoE6d9l%2F8IlVWRN7yR8ZgkAio0feUMGxIXkabjdrbLgSokjv68JOoeXLjDE9kYnHsNwqFZww46HtzAY6mAHeElo8%2FNMfa7TlHK381hnRsIpYCKpHzvlMdoYZ0zJzrB3CUxbHbzJ%2B%2BEtTvF3NwWw4sojgtila2JbkYs0AOkBtUoYxEg2Z2bFIuVrBitXxI0c1l%2FWdqNBNb9Uk5QrtGmdowe165LOYZFLo62405UUqKu9K7bpqIdkj1l%2BcSCbDnp6odFgDzimeZwIEi7CgD8Ko1c04VMKwyg%3D%3D&Expires=1771791847)
 
