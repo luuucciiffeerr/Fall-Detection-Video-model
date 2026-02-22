@@ -1,5 +1,6 @@
 # Big data
 fall_dataset/
+falldataset/
 *.log
 __pycache__/
 archive.zip
@@ -8,3 +9,4 @@ fall_detection/
 .env
 simple3dcnn_fall.pth 
 "*.pth" 
+Folio_Finder_AI.rar
